@@ -3,8 +3,14 @@ import pandas as pd
 import numpy as np
 import pydeck as pdk
 
+st.set_page_config(
+    page_title="NSAgent",
+    page_icon="🚀",
+)
+
 st.write("NASAgent")
 
+st.sidebar.success("Select a firtst map.")
 chart_data = pd.DataFrame(
    np.random.randn(1000, 2) / [50, 50] + [37.76, -122.4],
    columns=['lat', 'lon'])
