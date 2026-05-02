@@ -1,5 +1,2 @@
-h5py
-pyhdf
-pandas
-pydeck
-numpy
+libhdf4-dev
+libnetcdf-dev

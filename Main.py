@@ -6,25 +6,24 @@ import numpy as np
 import tempfile
 import os
 
-# pyhdf es opcional: solo se importa si está instalado
+# netCDF4 puede leer HDF4 y HDF5, además de NetCDF
 try:
-    from pyhdf.SD import SD, SDC
-    PYHDF_AVAILABLE = True
+    import netCDF4 as nc
+    NETCDF4_AVAILABLE = True
 except ImportError:
-    PYHDF_AVAILABLE = False
+    NETCDF4_AVAILABLE = False
 
 st.set_page_config(page_title="HDF Geo-Explorer", layout="wide")
 st.title("🛰️ Visor de Archivos HDF con Mapa")
 
-# --- Barra Lateral: Carga de Archivo ---
 uploaded_file = st.sidebar.file_uploader(
-    "Sube tu archivo HDF4 o HDF5",
-    type=['h5', 'hdf5', 'hdf', 'he4', 'he5', 'nc']
+    "Sube tu archivo HDF4, HDF5 o NetCDF",
+    type=['h5', 'hdf5', 'hdf', 'he4', 'he5', 'nc', 'nc4']
 )
 
 
 # ──────────────────────────────────────────────
-# Helpers HDF5 (h5py)
+# HDF5 con h5py
 # ──────────────────────────────────────────────
 def collect_datasets_hdf5(hdf_file):
     found = []
@@ -43,14 +42,14 @@ def read_hdf5(tmp_path):
             return None
 
         st.sidebar.success("HDF5 cargado correctamente ✅")
-        target_dataset = st.sidebar.selectbox("Selecciona un Dataset", datasets)
-        data_node = f[target_dataset]
+        target = st.sidebar.selectbox("Selecciona un Dataset", datasets)
+        node = f[target]
 
-        if len(data_node.shape) < 2:
+        if node.ndim < 2:
             st.warning("El dataset debe ser al menos bidimensional.")
             return None
 
-        raw = data_node[:10_000]
+        raw = node[:10_000]
         if raw.dtype.names:
             df = pd.DataFrame(raw)
             for col in df.columns:
@@ -61,49 +60,51 @@ def read_hdf5(tmp_path):
                         pass
         else:
             df = pd.DataFrame(raw)
-
     return df
 
 
 # ──────────────────────────────────────────────
-# Helpers HDF4 (pyhdf)
+# HDF4 / NetCDF con netCDF4
 # ──────────────────────────────────────────────
-def read_hdf4(tmp_path):
-    if not PYHDF_AVAILABLE:
-        st.error(
-            "Para leer archivos HDF4 necesitas instalar **pyhdf**.\n\n"
-            "Agrega `pyhdf` a tu `requirements.txt` y vuelve a desplegar."
-        )
+def read_hdf4_nc(tmp_path):
+    if not NETCDF4_AVAILABLE:
+        st.error("Instala **netCDF4** en tu `requirements.txt` para leer este formato.")
         return None
 
-    sd = SD(tmp_path, SDC.READ)
-    datasets = list(sd.datasets().keys())
-
-    if not datasets:
-        st.sidebar.error("No se encontraron datasets en el archivo HDF4.")
+    try:
+        ds = nc.Dataset(tmp_path, 'r')
+    except Exception as e:
+        st.error(f"No se pudo abrir el archivo: {e}")
         return None
 
-    st.sidebar.success("HDF4 cargado correctamente ✅")
-    target_dataset = st.sidebar.selectbox("Selecciona un Dataset", datasets)
-    sds = sd.select(target_dataset)
-    raw = sds.get()
-    sds.endaccess()
-    sd.end()
-
-    if raw.ndim < 2:
-        st.warning("El dataset debe ser al menos bidimensional.")
+    var_names = list(ds.variables.keys())
+    if not var_names:
+        st.sidebar.error("No se encontraron variables en el archivo.")
+        ds.close()
         return None
 
-    # Aplanar a 2D si tiene más dimensiones (tomar primer slice)
+    st.sidebar.success("HDF4/NetCDF cargado correctamente ✅")
+    target = st.sidebar.selectbox("Selecciona una Variable", var_names)
+    var = ds.variables[target]
+
+    if var.ndim < 2:
+        st.warning("La variable debe ser al menos bidimensional.")
+        ds.close()
+        return None
+
+    raw = np.array(var[:])
+    ds.close()
+
+    # Aplanar a 2D tomando el primer slice si tiene más dimensiones
     if raw.ndim > 2:
-        st.info(f"El dataset tiene forma {raw.shape}. Se muestra el primer slice `[0, ...]`.")
+        st.info(f"Variable con forma {raw.shape}. Se muestra el primer slice `[0, ...]`.")
         raw = raw[0]
 
     return pd.DataFrame(raw[:10_000])
 
 
 # ──────────────────────────────────────────────
-# Renderizado del mapa (común a ambos formatos)
+# Mapa
 # ──────────────────────────────────────────────
 def render_map_section(df):
     st.subheader("Vista previa del Dataset")
@@ -138,28 +139,23 @@ def render_map_section(df):
         st.error("No se encontraron coordenadas válidas (lat: −90…90, lon: −180…180).")
         return
 
-    st.pydeck_chart(
-        pdk.Deck(
-            map_style="mapbox://styles/mapbox/light-v9",
-            initial_view_state=pdk.ViewState(
-                latitude=map_df["lat"].mean(),
-                longitude=map_df["lon"].mean(),
-                zoom=3,
-                pitch=0,
-            ),
-            layers=[
-                pdk.Layer(
-                    "ScatterplotLayer",
-                    data=map_df,
-                    get_position="[lon, lat]",
-                    get_color="[200, 30, 0, 160]",
-                    get_radius=20_000,
-                    pickable=True,
-                )
-            ],
-            tooltip={"text": "Lat: {lat}\nLon: {lon}"},
-        )
-    )
+    st.pydeck_chart(pdk.Deck(
+        map_style="mapbox://styles/mapbox/light-v9",
+        initial_view_state=pdk.ViewState(
+            latitude=map_df["lat"].mean(),
+            longitude=map_df["lon"].mean(),
+            zoom=3, pitch=0,
+        ),
+        layers=[pdk.Layer(
+            "ScatterplotLayer",
+            data=map_df,
+            get_position="[lon, lat]",
+            get_color="[200, 30, 0, 160]",
+            get_radius=20_000,
+            pickable=True,
+        )],
+        tooltip={"text": "Lat: {lat}\nLon: {lon}"},
+    ))
     st.caption(f"{len(map_df):,} puntos graficados.")
 
 
@@ -168,18 +164,18 @@ def render_map_section(df):
 # ──────────────────────────────────────────────
 if uploaded_file is not None:
     ext = uploaded_file.name.rsplit('.', 1)[-1].lower()
-    is_hdf4 = ext in ('hdf', 'he4')
+    is_hdf5 = ext in ('h5', 'hdf5', 'he5')
 
-    suffix = f".{ext}"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
 
     try:
-        if is_hdf4:
-            df = read_hdf4(tmp_path)
-        else:
+        if is_hdf5:
             df = read_hdf5(tmp_path)
+        else:
+            # HDF4 (.hdf, .he4) y NetCDF (.nc, .nc4) via netCDF4
+            df = read_hdf4_nc(tmp_path)
 
         if df is not None:
             render_map_section(df)
@@ -190,4 +186,4 @@ if uploaded_file is not None:
         os.unlink(tmp_path)
 
 else:
-    st.info("Por favor, sube un archivo HDF4 (.hdf, .he4) o HDF5 (.h5, .hdf5) desde la barra lateral.")
+    st.info("Sube un archivo HDF4 (.hdf, .he4), HDF5 (.h5, .hdf5) o NetCDF (.nc) desde la barra lateral.")
