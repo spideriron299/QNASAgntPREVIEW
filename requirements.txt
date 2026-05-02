@@ -1,2 +1,6 @@
-libhdf4-dev
-libnetcdf-dev
+h5py
+netCDF4
+pandas
+pydeck
+numpy
+ 
