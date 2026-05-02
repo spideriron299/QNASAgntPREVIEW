@@ -1,3 +1,14 @@
+import streamlit as st
+import h5py
+import pandas as pd
+import pydeck as pdk
+import numpy as np
+
+# Configuración de la página (DEBE ser la primera instrucción de Streamlit)
+st.set_page_config(page_title="HDF5 Geo-Explorer", layout="wide")
+
+st.title("🛰️ Visor de Archivos HDF5 con Mapa")
+
 # --- Barra Lateral: Carga de Archivo ---
 uploaded_file = st.sidebar.file_uploader("Sube tu archivo .h5 o .hdf5", type=['h5', 'hdf5'])
 
