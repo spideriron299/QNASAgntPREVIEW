@@ -1,6 +1,3 @@
-
-Copiar
-
 import streamlit as st
 import h5py
 import pandas as pd
