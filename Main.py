@@ -6,12 +6,20 @@ import numpy as np
 import tempfile
 import os
 
-# netCDF4 puede leer HDF4 y HDF5, además de NetCDF
+# netCDF4 para HDF5/NetCDF
 try:
     import netCDF4 as nc
     NETCDF4_AVAILABLE = True
 except ImportError:
     NETCDF4_AVAILABLE = False
+
+# GDAL para HDF4
+try:
+    from osgeo import gdal
+    gdal.UseExceptions()
+    GDAL_AVAILABLE = True
+except ImportError:
+    GDAL_AVAILABLE = False
 
 st.set_page_config(page_title="HDF Geo-Explorer", layout="wide")
 st.title("🛰️ Visor de Archivos HDF con Mapa")
@@ -40,15 +48,12 @@ def read_hdf5(tmp_path):
         if not datasets:
             st.sidebar.error("No se encontraron datasets en el archivo.")
             return None
-
         st.sidebar.success("HDF5 cargado correctamente ✅")
         target = st.sidebar.selectbox("Selecciona un Dataset", datasets)
         node = f[target]
-
         if node.ndim < 2:
             st.warning("El dataset debe ser al menos bidimensional.")
             return None
-
         raw = node[:10_000]
         if raw.dtype.names:
             df = pd.DataFrame(raw)
@@ -64,41 +69,79 @@ def read_hdf5(tmp_path):
 
 
 # ──────────────────────────────────────────────
-# HDF4 / NetCDF con netCDF4
+# NetCDF (.nc, .nc4, .he5) con netCDF4
 # ──────────────────────────────────────────────
-def read_hdf4_nc(tmp_path):
+def read_netcdf(tmp_path):
     if not NETCDF4_AVAILABLE:
-        st.error("Instala **netCDF4** en tu `requirements.txt` para leer este formato.")
+        st.error("netCDF4 no está disponible.")
         return None
-
     try:
         ds = nc.Dataset(tmp_path, 'r')
     except Exception as e:
-        st.error(f"No se pudo abrir el archivo: {e}")
+        st.error(f"No se pudo abrir el archivo NetCDF: {e}")
         return None
 
-    var_names = list(ds.variables.keys())
+    var_names = [v for v in ds.variables if ds.variables[v].ndim >= 2]
     if not var_names:
-        st.sidebar.error("No se encontraron variables en el archivo.")
+        st.sidebar.error("No se encontraron variables 2D en el archivo.")
         ds.close()
         return None
 
-    st.sidebar.success("HDF4/NetCDF cargado correctamente ✅")
+    st.sidebar.success("NetCDF cargado correctamente ✅")
     target = st.sidebar.selectbox("Selecciona una Variable", var_names)
-    var = ds.variables[target]
-
-    if var.ndim < 2:
-        st.warning("La variable debe ser al menos bidimensional.")
-        ds.close()
-        return None
-
-    raw = np.array(var[:])
+    raw = np.array(ds.variables[target][:])
     ds.close()
 
-    # Aplanar a 2D tomando el primer slice si tiene más dimensiones
     if raw.ndim > 2:
         st.info(f"Variable con forma {raw.shape}. Se muestra el primer slice `[0, ...]`.")
         raw = raw[0]
+
+    return pd.DataFrame(raw[:10_000])
+
+
+# ──────────────────────────────────────────────
+# HDF4 (.hdf, .he4) con GDAL
+# ──────────────────────────────────────────────
+def read_hdf4(tmp_path):
+    if not GDAL_AVAILABLE:
+        st.error(
+            "GDAL no está disponible. Agrega `gdal` a `requirements.txt` "
+            "y `libgdal-dev gdal-bin libhdf4-dev` a `packages.txt`."
+        )
+        return None
+
+    # GDAL abre HDF4 listando subdatasets
+    ds = gdal.Open(tmp_path)
+    if ds is None:
+        st.error("GDAL no pudo abrir el archivo.")
+        return None
+
+    subdatasets = ds.GetSubDatasets()
+    ds = None  # cerrar el dataset raíz
+
+    if not subdatasets:
+        st.sidebar.error("No se encontraron subdatasets HDF4.")
+        return None
+
+    st.sidebar.success("HDF4 cargado correctamente ✅")
+    options = [s[1] for s in subdatasets]  # nombres legibles
+    paths   = [s[0] for s in subdatasets]  # rutas GDAL internas
+
+    target_label = st.sidebar.selectbox("Selecciona un Dataset", options)
+    target_path  = paths[options.index(target_label)]
+
+    band_ds = gdal.Open(target_path)
+    if band_ds is None:
+        st.error("No se pudo abrir el subdataset seleccionado.")
+        return None
+
+    band = band_ds.GetRasterBand(1)
+    raw = band.ReadAsArray()
+    band_ds = None
+
+    if raw is None or raw.ndim < 2:
+        st.warning("El dataset debe ser al menos bidimensional.")
+        return None
 
     return pd.DataFrame(raw[:10_000])
 
@@ -164,24 +207,24 @@ def render_map_section(df):
 # ──────────────────────────────────────────────
 if uploaded_file is not None:
     ext = uploaded_file.name.rsplit('.', 1)[-1].lower()
-    is_hdf5 = ext in ('h5', 'hdf5', 'he5')
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
 
     try:
-        if is_hdf5:
+        if ext in ('h5', 'hdf5'):
             df = read_hdf5(tmp_path)
-        else:
-            # HDF4 (.hdf, .he4) y NetCDF (.nc, .nc4) via netCDF4
-            df = read_hdf4_nc(tmp_path)
+        elif ext in ('nc', 'nc4', 'he5'):
+            df = read_netcdf(tmp_path)
+        else:  # hdf, he4 → HDF4
+            df = read_hdf4(tmp_path)
 
         if df is not None:
             render_map_section(df)
 
     except Exception as e:
-        st.error(f"Error al leer el archivo: {e}")
+        st.error(f"Error inesperado: {e}")
     finally:
         os.unlink(tmp_path)
 
