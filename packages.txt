@@ -1,0 +1,2 @@
+libhdf4-dev
+libhdf4-alt-dev
