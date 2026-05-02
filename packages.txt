@@ -1,4 +1,3 @@
 libgdal-dev
 gdal-bin
-libhdf4-dev
 libnetcdf-dev
